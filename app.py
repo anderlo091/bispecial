@@ -1553,7 +1553,7 @@ def export_visitors():
                     mimetype='text/csv',
                     headers={"Content-Disposition": f"attachment;filename=visitors_{username}.csv"}
                 )
-                        except Exception as e:
+            except Exception as e:  # Corrected indentation (aligned with try)
                 logger.error(f"Valkey error in export_visitors: {str(e)}")
                 return render_template_string("""
                     <!DOCTYPE html>
@@ -1610,7 +1610,6 @@ def export_visitors():
             </body>
             </html>
         """), 500
-
 @app.route("/export/<int:index>", methods=["GET"])
 @login_required
 def export(index):
