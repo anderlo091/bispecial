@@ -1553,7 +1553,7 @@ def export_visitors():
                     mimetype='text/csv',
                     headers={"Content-Disposition": f"attachment;filename=visitors_{username}.csv"}
                 )
-            except Exception as e:  # Corrected indentation (aligned with try)
+            except Exception as e:  # Properly indented with 4 spaces
                 logger.error(f"Valkey error in export_visitors: {str(e)}")
                 return render_template_string("""
                     <!DOCTYPE html>
@@ -1591,6 +1591,25 @@ def export_visitors():
                 </body>
                 </html>
             """), 500
+    except Exception as e:
+        logger.error(f"Error in export_visitors: {str(e)}", exc_info=True)
+        return render_template_string("""
+            <!DOCTYPE html>
+            <html lang="en">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Internal Server Error</title>
+                <script src="https://cdn.tailwindcss.com"></script>
+            </head>
+            <body class="min-h-screen bg-gray-100 flex items-center justify-center p-4">
+                <div class="bg-white p-8 rounded-xl shadow-lg max-w-sm w-full text-center">
+                    <h3 class="text-lg font-bold mb-4 text-red-600">Internal Server Error</h3>
+                    <p class="text-gray-600">Something went wrong. Please try again later.</p>
+                </div>
+            </body>
+            </html>
+        """), 500
     except Exception as e:
         logger.error(f"Error in export_visitors: {str(e)}", exc_info=True)
         return render_template_string("""
